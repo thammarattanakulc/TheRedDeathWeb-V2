@@ -13,11 +13,12 @@ html{font-size:calc(100%*var(--s-body,1))}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--fb,Georgia,"Times New Roman",serif);min-height:100vh}
 #logo{display:block;max-height:calc(70px*var(--s-logo,1));max-width:100%;margin:0 auto 10px}
 #clock.end{color:var(--acc)}
+#clock.paused{opacity:.45}
 #logo{transform:translate(calc(var(--px-logo,0)*1vw),calc(var(--py-logo,0)*1vh))}
 h1{transform:translate(calc(var(--px-title,0)*1vw),calc(var(--py-title,0)*1vh))}
 #clock{transform:translate(calc(var(--px-clock,0)*1vw),calc(var(--py-clock,0)*1vh))}
 #event{transform:translate(calc(var(--px-event,0)*1vw),calc(var(--py-event,0)*1vh)) scale(var(--s-evcard,1))}
-#start,#stop,#fs,#skip,.seg button{transform:translate(calc(var(--px-btn,0)*1vw),calc(var(--py-btn,0)*1vh)) scale(var(--s-btn,1))}
+#start,#pause,#stop,#fs,#skip,.seg button{transform:translate(calc(var(--px-btn,0)*1vw),calc(var(--py-btn,0)*1vh)) scale(var(--s-btn,1))}
 #pop{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3vh;text-align:center;padding:5vw;background:var(--bg);background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(6px);animation:pin .4s ease-out;cursor:pointer}
 #pop[hidden]{display:none}
 #pop .pn{font-size:min(14vw,22vh);color:var(--acc);line-height:1.05;font-family:var(--fh,inherit)}
@@ -97,7 +98,7 @@ const M=()=>C().modes.find(m=>m.id===cur)||C().modes[0];
 
 const TPL=`<img id="logo" alt="" hidden><h1 id="ttl">Board Game Timer</h1>
 <div class="card"><div class="seg" id="seg"></div><div id="clock">45:00</div><div id="bar"><div id="fill"></div></div><div id="status">Ready</div>
-<div class="btns"><button class="go" id="start">Start game</button><button id="stop" disabled>Stop</button></div>
+<div class="btns"><button class="go" id="start">Start game</button><button id="pause" disabled>Pause</button><button id="stop" disabled>Stop</button></div>
 <div class="btns"><button id="fs">Full screen</button><button id="skip" hidden>Skip introduction</button></div></div>
 <div class="card" id="event"><div class="lab">Event</div><div class="nm" id="evnm"></div><div class="txt" id="evtxt">Waiting for the first bell…</div></div>
 <div class="card" id="logcard"><div class="lab">Event log</div><ol id="log"></ol></div>
@@ -183,13 +184,13 @@ function startGame(){
   let lst=c.events.filter(e=>(e.modes||[]).includes(m.id));if(!lst.length)lst=c.events;if(!lst.length)lst=[{name:"Event",text:"",sound:null}];
   const cnt=lst.map(()=>0);
   S.picks=S.times.map(()=>{let ok=lst.map((e,i)=>i).filter(i=>!(lst[i].max>0)||cnt[i]<lst[i].max);if(!ok.length)ok=lst.map((e,i)=>i);const i=ok[Math.floor(Math.random()*ok.length)];cnt[i]++;return lst[i]});
-  S.n=0;S.last=-1;S.run=true;S.hold=false;S.t0=Date.now();S.phase="main";S.endLen=Math.max(0,m.endMinutes==null?15:m.endMinutes)*60000;$("clock").classList.remove("end");
+  S.n=0;S.last=-1;S.run=true;S.hold=false;S.paused=false;S.pendRel=null;S.pl=[];S.t0=Date.now();S.phase="main";S.endLen=Math.max(0,m.endMinutes==null?15:m.endMinutes)*60000;$("clock").classList.remove("end");
   $("log").innerHTML="";$("evnm").textContent="";$("evtxt").textContent="Waiting for the first bell…";
-  $("start").disabled=true;$("stop").disabled=false;$("status").textContent="Game in progress";renderSeg();
+  $("start").disabled=true;$("stop").disabled=false;$("pause").disabled=false;$("pause").textContent="Pause";$("status").textContent="Game in progress";renderSeg();
   ac();unlock(S.c);
   if(S.c.intro){
     const id=(S.hid=(S.hid||0)+1),a=aud(S.c.intro.url);S.introA=a;
-    const rel=()=>{if(S.hid!==id)return;S.rel=null;$("skip").hidden=true;if(S.hold){S.hold=false;S.t0+=Date.now()-S.hs}$("status").textContent="Game in progress";$("evtxt").textContent="Waiting for the first bell…";if(!S.bgOn){S.bgOn=true;startBg(S.c)}};
+    const rel=()=>{if(S.hid!==id)return;if(S.paused){S.pendRel=rel;return}S.rel=null;$("skip").hidden=true;if(S.hold){S.hold=false;S.t0+=Date.now()-S.hs}$("status").textContent="Game in progress";$("evtxt").textContent="Waiting for the first bell…";if(!S.bgOn){S.bgOn=true;startBg(S.c)}};
     S.rel=rel;S.bgOn=false;
     $("skip").hidden=false;$("status").textContent="Introduction playing";$("evtxt").textContent="Introduction…";
     $("clock").textContent=S.c.showClock?fmt(S.len):"••:••";
@@ -201,7 +202,7 @@ function startGame(){
   S.timer=setInterval(tick,250);tick();
 }
 function tick(){
-  if(S.hold)return;
+  if(S.hold||S.paused)return;
   const el=Date.now()-S.t0;
   if(S.phase==="main"){
     $("clock").textContent=S.c.showClock?fmt(S.len-el):"••:••";
@@ -227,7 +228,7 @@ function startEnd(){
 function fire(el){
   const e=S.picks[S.n];S.n++;
   S.hold=true;S.hs=Date.now();S.hid=(S.hid||0)+1;bgLevel(S.c.duck==null?0:S.c.duck/100);
-  const id=S.hid,rel=()=>{if(!S.hold||S.hid!==id)return;S.hold=false;bgLevel(1);S.t0+=Date.now()-S.hs;if(S.run)$("status").textContent=S.n+" of "+S.times.length+" events done"};
+  const id=S.hid,rel=()=>{if(!S.hold||S.hid!==id)return;if(S.paused){S.pendRel=rel;return}S.hold=false;bgLevel(1);S.t0+=Date.now()-S.hs;if(S.run)$("status").textContent=S.n+" of "+S.times.length+" events done"};
   if(e.sound){const a=aud(e.sound.url);ac();setA(a,e.sound,S.c);a.loop=false;a.currentTime=0;S.rel=rel;S.curA=a;a.onended=rel;a.onerror=rel;a.play().catch(rel);setTimeout(rel,180000)}
   else{let i;do{i=Math.floor(Math.random()*synth.length)}while(i===S.last);S.last=i;synth[i]();S.rel=rel;S.curA=null;setTimeout(rel,3500)}
   const b=$("event");b.classList.remove("flash");void b.offsetWidth;b.classList.add("flash");
@@ -241,17 +242,17 @@ function finish(){
   if(S.c.bell)play(S.c.bell,S.c);else[0,1.6,3.2].forEach(d=>bellSound(196,d));
   $("clock").textContent="00:00";$("clock").classList.remove("end");$("fill").style.width="100%";
   $("evnm").textContent="";$("evtxt").textContent="Time’s up.";$("status").textContent="Game over";
-  $("start").disabled=false;$("stop").disabled=true;renderSeg();
+  $("start").disabled=false;$("stop").disabled=true;$("pause").disabled=true;$("pause").textContent="Pause";$("clock").classList.remove("paused");S.paused=false;S.pendRel=null;S.pl=[];if(ctx&&ctx.state==="suspended")try{ctx.resume()}catch(e){}renderSeg();
 }
 function stopGame(){
   clearInterval(S.timer);S.run=false;stopBg();S.hold=false;S.hid=(S.hid||0)+1;S.rel=null;if(S.introA)S.introA.pause();$("skip").hidden=true;
-  $("status").textContent="Stopped";$("start").disabled=false;$("stop").disabled=true;$("fill").style.width="0";$("clock").classList.remove("end");
+  $("status").textContent="Stopped";$("start").disabled=false;$("stop").disabled=true;$("pause").disabled=true;$("pause").textContent="Pause";$("clock").classList.remove("paused");S.paused=false;S.pendRel=null;S.pl=[];if(ctx&&ctx.state==="suspended")try{ctx.resume()}catch(e){}$("fill").style.width="0";$("clock").classList.remove("end");
   renderSeg();showClock(M().minutes*60000);
 }
 $("start").onclick=startGame;$("stop").onclick=stopGame;
-$("skip").onclick=()=>{if(S.introA)S.introA.pause();if(S.rel)S.rel()};
+$("skip").onclick=()=>{if(S.paused)togglePause();if(S.introA)S.introA.pause();if(S.rel)S.rel()};
 function jump(k){
-  const ref=S.hold?S.hs:Date.now(),el=ref-S.t0;let X=null;
+  const ref=S.hold?S.hs:(S.paused?S.ps:Date.now()),el=ref-S.t0;let X=null;
   if(k==="stopsnd"){if(S.curA)S.curA.pause();if(S.introA)S.introA.pause();if(S.rel)S.rel();return}
   if(k==="add60")X=el+60000;
   else if(k==="add300")X=el+300000;
@@ -285,6 +286,26 @@ async function toggleFs(){
   else if(document.fullscreenElement||document.webkitFullscreenElement){const x=document.exitFullscreen||document.webkitExitFullscreen;if(x){try{await x.call(document)}catch(e){}}}
 }
 $("fs").onclick=toggleFs;
+/* ---------- pause ---------- */
+function togglePause(){
+  if(!S.run)return;
+  if(!S.paused){
+    S.paused=true;S.ps=Date.now();S.stBefore=$("status").textContent;
+    S.pl=Object.values(cache).filter(a=>!a.paused&&!a.ended);S.pl.forEach(a=>a.pause());
+    if(ctx&&ctx.suspend)try{ctx.suspend()}catch(e){}
+    $("pause").textContent="Resume";$("clock").classList.add("paused");$("status").textContent="Paused";
+  }else{
+    S.paused=false;
+    if(!S.hold)S.t0+=Date.now()-S.ps;
+    if(ctx&&ctx.resume)try{ctx.resume()}catch(e){}
+    (S.pl||[]).forEach(a=>{const p=a.play();if(p&&p.catch)p.catch(()=>{})});S.pl=[];
+    $("pause").textContent="Pause";$("clock").classList.remove("paused");$("status").textContent=S.stBefore||"Game in progress";
+    const r=S.pendRel;S.pendRel=null;if(r)r();
+    if(!S.hold)tick();
+  }
+}
+$("pause").onclick=togglePause;
+document.addEventListener("keydown",e=>{if(e.code==="Space"&&S.run&&!/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)){e.preventDefault();togglePause()}});
 ["fullscreenchange","webkitfullscreenchange"].forEach(ev=>document.addEventListener(ev,()=>{if(!document.fullscreenElement&&!document.webkitFullscreenElement&&document.documentElement.classList.contains("big"))setBig(false)}));
 document.addEventListener("keydown",e=>{if((e.key==="f"||e.key==="F")&&!/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)&&!e.metaKey&&!e.ctrlKey)toggleFs()});
 function renderSeg(){
